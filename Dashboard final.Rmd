@@ -1,0 +1,210 @@
+---
+title: "Dashboard for Mooring Research"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: scroll
+---
+```{r}
+#Variable Names Used
+#In the global input sidebar
+  #Grouping: choosing how the sites will be grouped (Single site, Grouped sites, Overall, Multiple sites)
+  #Groups: the groups chosen for single site and multiple sites designations
+  #siteNum: if GroupingRAI = multiple grouped sites, shows how many groups you want to partition the sites into
+  #siteSelect: if GroupingRAI = multiple grouped sites, which group working with (equals Group#)
+  #Group#Name: if GroupingRAI = multiple grouped sites, name of the group working with. inputId changes with which group working with
+  #Group#Site: if GroupingRAI = multiple grouped sites, the sites to go within that group. inputID changes with which group working with
+
+
+
+#fix because group#name/Site same for net and RAI
+#To-Do:
+  #if single, single grouped or multiple: GroupsRAI represents different things
+```
+
+```{r setup, include=FALSE}
+library(shiny)
+library(scales)
+library(data.table)
+
+#Read in extra information ----
+#creates matched lists to create dictionary for standard grouped sites
+stand.site.name <- c("Marta, Copal", "Chirripo", "Tapanti", "Savegre", "Cabo Blanco", "ASBC", "Osa", "PILA") #grouping name
+stand.site <-list(c("Marta", "Copal"), c("Chirripo"), c("Tapanti", "Villa Mills"), c("Savegre Valley"), c("Cabo Blanco", "PNLC", "PN Carara"), c("ASBC", "Bosque de Agua"), c("Osa Campanario"), c("PILA","Kamuk","CBQTC")) #site groupings
+camera <- c("ASBC", "Cabo Blanco", "Bosque de Agua", "CBQTC", "Chirripo", "Copal", "Kamuk", "PILA", "PNLC", "Marta", "Osa Campanario", "PN Carara", "Savegre Valley", "Tapanti", "Villa Mills")
+days <- c(3472,865,597,449,6431,634,2014,2371,1313,720,1533,260,17459,9593,761)
+
+#Corrects DataSet ----  
+#ind.data <- read.csv("~/College/Mooring Research/2018/Data Sets/Database Spring 2018- 6.22.18 (1).csv", stringsAsFactors = FALSE)
+ind.data <- read.csv("~/College/Mooring Research/2019/Data Files/Database 6.27.19.csv", stringsAsFactors = FALSE)
+ind.data <- ind.data[ind.data["Independent"] ==  "Yes",]
+ind.data <- ind.data[ind.data$Species != "Unknown",]
+ind.data <- ind.data[ind.data$Species != "unknown",]
+ind.data <- ind.data[ind.data$Species != "",]
+
+
+
+#max.time <- max(ind.data$Time)
+
+#if (max.time > 12 & max.time <= 24) {
+#  ind.data["TimeRad"] <- ind.data$Time*2*pi/24
+#} else if (max.time <= 1) {     
+#  ind.data["TimeRad"] <- ind.data$Time*2*pi
+#} else print("Unknown time format.")
+
+ind.data["Site"] <- gsub("\\s*20\\d\\d\\s*|\\s*Spring\\s*|\\s*Summer\\s*|\\s*Fall\\s*|\\s*El\\s*|\\s*La\\s*|\\s*National Park\\s*|\\-", "", ind.data$Survey.Name)
+
+ind.data <- ind.data[ind.data$Site != "Yorks Nubes",]
+
+
+#Functions ----
+calcRAI <- function(animal, site, superSite = NA){
+    animal.sub <- ind.data[ind.data$Species == animal & ind.data$Site %in% site,"Time"]
+    n = length(animal.sub)
+    sumdays = sum(days[match(site,camera)])
+    RAI = (n/sumdays)*1000
+    if(input$Grouping == "Overall"){
+      site = "Overall"
+    }
+    else if(input$Grouping %in% c("Standard Grouped Sites", "Custom Grouped Sites")){
+      if (is.null(superSite)){
+        site <- ""
+      }
+      else{
+      site <- superSite
+      }
+    }
+    line <- rbind(animal,n,sumdays,RAI, site)
+    return(line)
+ }
+
+calcRAITotal <- function(namelist, site, superSite = NA){
+  
+  #create a data frame for each combination
+    
+    RAIall <- apply(namelist, 1, function(animal){calcRAI(animal, site, superSite)}) 
+    RAIall <- t(data.frame(RAIall))
+    RAIall <- data.frame(RAIall)
+    colnames(RAIall) <- c("Species", "n", "Camera Days", "RAI", "Site")
+    return(RAIall)
+}
+
+createRAITable <- function(){
+    
+  nametable <- names(table(ind.data$Species))
+  namelist <- array(nametable,dim=c(length(nametable),1))
+  
+  if(input$Grouping == "Overall"){
+      sitetable <- names(table(ind.data$Site))
+      sitelist <- array(sitetable,dim=c(length(sitetable),1))
+      RAIall <- calcRAITotal(namelist, sitelist)
+  }
+  else if (input$Grouping == "Single Site"){
+    calcRAITotal(namelist, input$Groups)
+  }
+  else if(input$Grouping == "Multiple Sites"){
+    RAIall <- lapply(input$Groups, function(site){calcRAITotal(namelist, site)})
+    RAIall <- rbindlist(RAIall)
+  }
+  else if(input$Grouping == "Standard Grouped Sites"){
+    RAIall <- lapply(stand.site.name, function(superSite){
+      site <- stand.site[[match(superSite, stand.site.name)]]
+      calcRAITotal(namelist,site,superSite)})
+    RAIall <- rbindlist(RAIall)
+  }
+  else{
+    RAIall <- lapply(c(1:input$siteNum), function(i){
+      superSite <- input[[paste0("Group", i, "Name")]]
+      calcRAITotal(namelist,
+            input[[paste0("Group",i,"Site")]], 
+            superSite) 
+
+    })
+    RAIall <- rbindlist(RAIall, fill=TRUE )
+  }
+  }
+```
+Column {.sidebar}
+=================================================
+
+###**Selecting How to Group Sites**
+```{r}
+radioButtons(inputId = "Grouping", label = "Choose How Groups are Split", choices = c("Overall", "Single Site", "Multiple Sites", "Standard Grouped Sites", "Custom Grouped Sites"))
+
+uiOutput("dynamic2")
+output$dynamic2 <- renderUI({
+  if(input$Grouping == "Single Site") {
+    radioButtons(inputId = "Groups", label = "Choose Site", choices = unique(ind.data$Site))
+    } 
+  
+  else if(input$Grouping == "Overall") {} 
+  else if(input$Grouping == "Standard Grouped Sites"){
+        #renderTable({data.frame(stand.site.name,stand.site)})
+  }
+  else if(input$Grouping == "Multiple Sites") {
+        checkboxGroupInput(inputId = "Groups", label = "Choose sites", choices = unique(ind.data$Site), selected = unique(ind.data$Site))}
+  
+    else{
+    sliderInput(inputId = "siteNum", label = "How Many Site Distinctions?", min = 1, max = 13, value = 7, step = 1, round = TRUE)
+  }
+})
+
+```
+
+
+```{r}
+uiOutput("dynamic3")
+output$dynamic3 <- renderUI({
+
+req(input$siteNum)
+ if(input$Grouping == "Custom Grouped Sites"){
+selectInput(inputId = "siteSel", label = "Designate sites for Each Super Site", choices = paste0(rep("Group", input$siteNum), c(1:input$siteNum)))
+}
+})
+```
+
+
+```{r}
+uiOutput("dynamic4")
+output$dynamic4 <- renderUI({
+  req(input$siteSel)
+  if(input$Grouping == "Custom Grouped Sites"){
+    textInput(inputId = paste0(input$siteSel,"Name"), label = "Enter Name for Group")
+  }
+})
+```
+
+```{r}
+uiOutput("dynamic5")
+output$dynamic5 <- renderUI({
+  req(input$siteSel)
+  if(input$Grouping == "Custom Grouped Sites"){
+      checkboxGroupInput(inputId = paste0(input$siteSel, "Site"), label = paste("Choose sites to include in", input$siteSel), choices = unique(ind.data$Site))
+
+  }
+})
+```
+
+
+Calculating RAI 
+============================================
+
+```{r}
+(shiny::downloadButton("downloadRAI", "Download"))
+  
+
+renderTable({
+  createRAITable()
+})
+
+output$downloadRAI <- downloadHandler(
+  filename = function() {
+    "RAIcalculations.csv"
+  },
+  content = function(file) {
+    write.csv(createRAITable(), file)
+  })
+
+```
+
